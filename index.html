@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Helicopter Commando: Overdrive</title>
+    <title>Helicopter Commando: Lean</title>
     <style>
         body { margin: 0; background: #05050a; overflow: hidden; font-family: 'Segoe UI', sans-serif; }
         canvas { display: block; }
@@ -12,7 +12,7 @@
         button { background: #00ffcc; border: none; padding: 15px 30px; font-weight: bold; cursor: pointer; margin: 10px; font-size: 1.2rem; }
     </style>
 </head>
-<body onload="Game.start()">
+<body onload="Game.init()">
     <div id="ui-layer">
         <div id="stat-bar" style="font-size: 1.8rem; letter-spacing: 2px;">LVL 01 | SCORE 0000</div>
         <div style="width: 280px; height: 10px; border: 2px solid #00ffcc; margin-top: 8px;">
@@ -21,39 +21,22 @@
     </div>
     <div id="ad-overlay">
         <h1 style="color: #ff3300;">MISSION FAILURE</h1>
-        <button onclick="Game.showAd()">REDEPLOY (AD)</button>
-        <button onclick="location.reload()">ABORT</button>
+        <button onclick="location.reload()">RETRY MISSION</button>
     </div>
     <canvas id="gameCanvas"></canvas>
 
 <script>
-// --- CORE ENGINE FIXES APPLIED ---
-const TacticalAI = {
-    activated: false,
-    speak(text) {
-        if (!this.activated) return;
-        window.speechSynthesis.cancel(); // Fix #2: Prevent audio stacking
-        const msg = new SpeechSynthesisUtterance(text);
-        const voices = window.speechSynthesis.getVoices();
-        msg.voice = voices.find(v => v.name.includes('Natural') || v.name.includes('Soft')) || voices[0];
-        msg.pitch = 0.85; msg.rate = 0.9;
-        window.speechSynthesis.speak(msg);
-    },
-    trigger() { if(!this.activated) { this.activated = true; this.speak("Commando, systems online."); } }
-};
-
+// --- LEAN INPUT (KEYBOARD ONLY) ---
 const InputHandler = {
-    keys: {}, deadzone: 0.15,
+    keys: {},
     init() {
-        window.addEventListener('keydown', e => { this.keys[e.code] = true; TacticalAI.trigger(); });
+        window.addEventListener('keydown', e => this.keys[e.code] = true);
         window.addEventListener('keyup', e => this.keys[e.code] = false);
     },
     getMovement() {
         let x = 0;
         if (this.keys['KeyA'] || this.keys['ArrowLeft']) x = -1;
         if (this.keys['KeyD'] || this.keys['ArrowRight']) x = 1;
-        const gp = navigator.getGamepads()[0];
-        if (gp && Math.abs(gp.axes[0]) > this.deadzone) x = gp.axes[0];
         return x;
     }
 };
@@ -70,36 +53,150 @@ class Particle {
 
 const Game = {
     level: 1, score: 0, bullets: [], enemies: [], particles: [], shake: 0,
-    start() {
+    started: false,
+
+    init() {
         this.canvas = document.getElementById('gameCanvas');
         this.ctx = this.canvas.getContext('2d');
         this.resize();
+        window.addEventListener('resize', () => this.resize());
+        
+        // Show Start Screen
+        this.ctx.fillStyle = '#0a0a12';
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        this.ctx.fillStyle = '#00ffcc';
+        this.ctx.font = "24px Segoe UI";
+        this.ctx.textAlign = "center";
+        this.ctx.fillText("CLICK TO DEPLOY COMMANDO", this.canvas.width/2, this.canvas.height/2);
+        
+        window.addEventListener('mousedown', () => this.start());
+    },
+
+    start() {
+        if (this.started) return;
+        this.started = true;
         InputHandler.init();
         this.player = { x: 150, y: 500, vy: 0, health: 100, onGround: true, lastFire: 0 };
         this.loop();
     },
-    resize() { this.canvas.width = window.innerWidth; this.canvas.height = window.innerHeight; },
-    spawnExplosion(x, y, color) {
-        for(let i=0; i<12; i++) this.particles.push(new Particle(x, y, color));
-        this.shake = 8;
-        if (this.particles.length > 100) this.particles.splice(0, 20); // Fix #3: Particle Cap
+
+    resize() { 
+        this.canvas.width = window.innerWidth; 
+        this.canvas.height = window.innerHeight; 
     },
-    loop() { this.update(); this.draw(); requestAnimationFrame(() => this.loop()); },
+
+    spawnExplosion(x, y, color) {
+        for(let i=0; i<10; i++) this.particles.push(new Particle(x, y, color));
+        this.shake = 8;
+        if (this.particles.length > 80) this.particles.splice(0, 20);
+    },
+
+    loop() {
+        this.update();
+        this.draw();
+        requestAnimationFrame(() => this.loop());
+    },
+
     update() {
         if (this.player.health <= 0) return;
+
         const move = InputHandler.getMovement();
         this.player.x = Math.max(0, Math.min(this.canvas.width - 40, this.player.x + move * 10));
 
-        const gp = navigator.getGamepads()[0];
-        const jumping = this.keys['Space'] || (gp && (gp.buttons[0].pressed || gp.buttons[1].pressed));
-        if (jumping && this.player.onGround) { this.player.vy = -18; this.player.onGround = false; }
-        this.player.y += this.player.vy; this.player.vy += 0.9;
+        // Jump logic
+        if ((InputHandler.keys['Space'] || InputHandler.keys['ArrowUp'] || InputHandler.keys['KeyW']) && this.player.onGround) {
+            this.player.vy = -18;
+            this.player.onGround = false;
+        }
+        
+        this.player.y += this.player.vy;
+        this.player.vy += 0.9;
         if (this.player.y >= 500) { this.player.y = 500; this.player.onGround = true; this.player.vy = 0; }
 
-        if ((jumping || this.keys['KeyF']) && Date.now() - this.player.lastFire > 120) {
+        // Fire logic
+        if ((InputHandler.keys['Space'] || InputHandler.keys['KeyF']) && Date.now() - this.player.lastFire > 120) {
             this.bullets.push({ x: this.player.x + 40, y: this.player.y + 25, vx: 20 });
             this.player.lastFire = Date.now();
         }
 
+        // Enemy Spawning
         if (Math.random() < 0.007 + (this.level * 0.008)) {
-            this.enemies.push({ x
+            this.enemies.push({ x: this.canvas.width, y: 50 + Math.random() * 400, hp: 1 + Math.floor(this.level/4), speed: 4 + (this.level * 0.8) });
+        }
+
+        // Collision: Bullets -> Enemies
+        this.bullets.forEach((b, bi) => {
+            b.x += b.vx;
+            this.enemies.forEach((e, ei) => {
+                if (Math.abs(b.x - e.x) < 50 && Math.abs(b.y - e.y) < 40) {
+                    e.hp--; this.bullets.splice(bi, 1);
+                    if (e.hp <= 0) { 
+                        this.spawnExplosion(e.x, e.y, '#ff3300');
+                        this.enemies.splice(ei, 1); 
+                        this.score += 100;
+                        if (this.score >= this.level * 1500 && this.level < 10) this.level++;
+                        document.getElementById('stat-bar').innerText = `LVL: ${this.level.toString().padStart(2, '0')} | SCORE: ${this.score.toString().padStart(4, '0')}`;
+                    }
+                }
+            });
+        });
+
+        // Collision: Enemies -> Player
+        this.enemies.forEach((e, ei) => {
+            e.x -= e.speed;
+            if (Math.abs(e.x - this.player.x) < 40 && Math.abs(e.y - this.player.y) < 60) {
+                this.player.health -= 15;
+                this.enemies.splice(ei, 1);
+                this.spawnExplosion(this.player.x, this.player.y, '#00ffcc');
+                document.getElementById('health-fill').style.width = this.player.health + '%';
+                if (this.player.health <= 0) document.getElementById('ad-overlay').style.display = 'block';
+            }
+        });
+
+        this.particles.forEach((p, i) => { p.update(); if(p.life <= 0) this.particles.splice(i, 1); });
+        this.bullets = this.bullets.filter(b => b.x < this.canvas.width);
+        this.enemies = this.enemies.filter(e => e.x > -100);
+        if(this.shake > 0) this.shake *= 0.9;
+    },
+
+    draw() {
+        this.ctx.save();
+        if(this.shake > 1) this.ctx.translate(Math.random()*this.shake, Math.random()*this.shake);
+        this.ctx.fillStyle = '#050512';
+        this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+        
+        // Ground line
+        this.ctx.fillStyle = "#111";
+        this.ctx.fillRect(0, 560, this.canvas.width, this.canvas.height);
+        this.ctx.strokeStyle = "#00ffcc";
+        this.ctx.strokeRect(0, 560, this.canvas.width, 1);
+
+        // Player (Operative)
+        this.ctx.fillStyle = "#00ffcc";
+        this.ctx.fillRect(this.player.x, this.player.y, 40, 60);
+
+        // Bullets
+        this.ctx.fillStyle = "#ffff00";
+        this.bullets.forEach(b => this.ctx.fillRect(b.x, b.y, 10, 3));
+
+        // Enemies
+        this.enemies.forEach(e => {
+            this.ctx.fillStyle = "#ff3300";
+            this.ctx.fillRect(e.x, e.y, 70, 35);
+            this.ctx.fillStyle = "#fff";
+            this.ctx.fillRect(e.x - 10, e.y - 5, 90, 4);
+        });
+
+        // Particles
+        this.particles.forEach(p => {
+            this.ctx.globalAlpha = p.life;
+            this.ctx.fillStyle = p.color;
+            this.ctx.fillRect(p.x, p.y, 4, 4);
+        });
+
+        this.ctx.restore();
+    }
+};
+</script>
+</body>
+</html>
